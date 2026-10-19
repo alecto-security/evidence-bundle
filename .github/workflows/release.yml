@@ -1,0 +1,189 @@
+name: release
+
+# A tag is the release. workflow_dispatch exists to (re)publish an existing
+# tag — including v0.1.0, which was cut before this workflow existed — and to
+# repair a release whose assets failed to build.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing vX.Y.Z tag to build and publish"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        run: cargo test
+
+  build:
+    name: build (${{ matrix.target }})
+    needs: gate
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Static musl: the binary runs on any Linux, no glibc version games.
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-14
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Resolve release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ inputs.tag || github.ref_name }}"
+          case "$version" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::release runs on a vX.Y.Z tag, got '$version'"; exit 1 ;;
+          esac
+          {
+            echo "VERSION=$version"
+            echo "TARGET=${{ matrix.target }}"
+            echo "STAGE=verify-$version-${{ matrix.target }}"
+          } >> "$GITHUB_ENV"
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "stage/$STAGE" dist
+          cp "target/$TARGET/release/verify" "stage/$STAGE/verify"
+          cp LICENSE README.md "stage/$STAGE/"
+          tar -C stage -czf "dist/$STAGE.tar.gz" "$STAGE"
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $stage = Join-Path "stage" $env:STAGE
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          New-Item -ItemType Directory -Force -Path "dist" | Out-Null
+          Copy-Item "target/$env:TARGET/release/verify.exe" (Join-Path $stage "verify.exe")
+          Copy-Item LICENSE, README.md $stage
+          Compress-Archive -Path $stage -DestinationPath (Join-Path "dist" "$env:STAGE.zip")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: publish
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Resolve release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ inputs.tag || github.ref_name }}"
+          case "$version" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "::error::release runs on a vX.Y.Z tag, got '$version'"; exit 1 ;;
+          esac
+          pkg=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)
+          if [ "v$pkg" != "$version" ]; then
+            echo "::error::tag $version does not match Cargo.toml version $pkg"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Write and check sha256sums.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum -- * > sha256sums.txt
+          echo "---- sha256sums.txt ----"
+          cat sha256sums.txt
+          echo "-------------------------"
+          sha256sum -c sha256sums.txt
+      - name: Smoke-test the shipped linux binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="verify-$VERSION-x86_64-unknown-linux-musl"
+          tar -xzf "dist/$stage.tar.gz" -C /tmp
+          "/tmp/$stage/verify" fixtures/minimal-full-coverage --json > /dev/null
+          echo "pass: minimal-full-coverage verifies with the release binary"
+          set +e
+          out=$("/tmp/$stage/verify" fixtures/tampered-original 2>&1)
+          code=$?
+          set -e
+          test "$code" -eq 2 || { echo "::error::expected exit 2, got $code"; exit 1; }
+          echo "$out" | grep -F "hash mismatch" > /dev/null \
+            || { echo "::error::tampered fixture did not name a hash mismatch: $out"; exit 1; }
+          echo "pass: tampered-original is rejected by the release binary"
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          notes=$(mktemp)
+          awk -v v="${VERSION#v}" '
+            $0 ~ "^## \\["v"\\]" { on = 1; next }
+            on && /^## \[/ { exit }
+            on' CHANGELOG.md > "$notes"
+          if [ ! -s "$notes" ]; then
+            echo "::warning::no CHANGELOG section for $VERSION"
+            echo "$VERSION" > "$notes"
+          fi
+          if gh release view "$VERSION" > /dev/null 2>&1; then
+            gh release upload "$VERSION" dist/* --clobber
+            gh release edit "$VERSION" --notes-file "$notes"
+          else
+            gh release create "$VERSION" dist/* \
+              --verify-tag \
+              --title "$VERSION" \
+              --notes-file "$notes"
+          fi
+          echo "published $VERSION"
