@@ -2,8 +2,9 @@
 
 The sealed evidence bundle, as an open format. This repo is the normative
 specification of the bundle layout, the SHA-256 seal algorithm, the metadata
-schema (version `1`) and the provenance-proof rules, plus a standalone,
-hash-only verifier.
+schema (version `1`) and the provenance-proof rules, plus a standalone
+verifier: the seal, and the notary proof's Ed25519 signatures and record
+chain.
 
 Think of the seal as an SBOM for video evidence: any examiner, auditor or
 integrator can check, without camera code, without a subscription, without
@@ -27,12 +28,12 @@ sealed, and that the bundle's own integrity record agrees with the files.
 3. **The metadata is intact.** `metadata.json` is not inside the manifest
    (that would be self-referential); its integrity is a separate sidecar,
    `metadata.json.sha256`.
-4. **Provenance claims carry proof files.** A bundle that claims its footage
-   came from a continuously signed recorder or a recovered disk image must
-   contain that proof or `verify` fails. (Signature and chain
-   re-verification of the recorder proof lives in the public
-   [alecto-notary](https://github.com/alecto-security/alecto-notary) verifier;
-   this crate checks that the proof is present and sealed.)
+4. **Provenance claims carry proof, and a notary proof is re-verified.** A
+   bundle that claims signed-recorder footage must carry the signed record
+   slice and public key; `verify` re-checks every Ed25519 signature, the key
+   id, seq continuity and the links inside the slice, and requires each
+   retrieved hash to be covered by a signed segment. A recovered-disk claim
+   must carry the seven `forensic/` proof files.
 5. **Nothing is hidden.** Files on disk that the seal does not cover cause a
    failure, except a written-after-sealing report (`evidence-report.pdf`).
    Gaps in camera coverage are first-class records, printed by the verifier,
@@ -52,7 +53,7 @@ Exit codes mirror the producing gateway's contract:
 
 | Code | Meaning |
 |------|---------|
-| `0` | verified: seal holds, metadata agrees, proofs present |
+| `0` | verified: seal holds, metadata agrees, proofs verified |
 | `2` | bundle rejected: tamper, unlisted file, missing proof, broken seal |
 | `3` | usage error |
 
@@ -61,7 +62,7 @@ Exit codes mirror the producing gateway's contract:
 ```text
 docs/SPEC.md      normative specification (schema v1)
 fixtures/         canonical test bundles: this is what CI re-verifies
-src/verify.rs     the verifier logic (hash-only)
+src/lib.rs        the verifier logic (seal + notary proof)
 src/main.rs       the `verify` CLI
 tests/            fixture matrix + mutation tests
 ```
@@ -71,21 +72,27 @@ tests/            fixture matrix + mutation tests
 - **Does:** set parity between `SHA256SUMS` and disk, per-file digests,
   sidecar digest, `bundle_hash` recomputation, `schema_version`
   acceptance, required-field presence, provenance-proof presence,
-  `retrieved[].source_sha256` consistency.
-- **Does not (v0.1.0):** re-verify recorder signatures and hash chains.
-  That is a deliberate boundary: hash checks have no key dependencies, so
-  this tool has no reason to touch the network or a keystore. Signature
-  verification is additive already in the producing gateways, and a future
-  `1.x` here can add it without a spec change.
+  `retrieved[].source_sha256` consistency, and real notary proof
+  verification: Ed25519 signatures over the canonical record, the key id,
+  seq continuity, chain links, and coverage of every retrieved hash.
+- **Does not:** establish that the public key belongs to a recorder you
+  trust (the key travels with the bundle), or check the first record's link
+  to earlier history (a slice is a window). Tail truncation needs an
+  off-box signed checkpoint. See SPEC §5.6.
 - Reads only. Writes nothing. Makes no network requests (enforced by test:
-  network-capable crates cannot enter `Cargo.lock`).
+  network-capable crates cannot enter `Cargo.lock`). Signature verification
+  needs no network and no keystore: the key is a file in the bundle.
 
 ## Known limits
 
 - Payload files are hashed streamed in 1 MiB chunks; bundle trees can be
   gigabytes. `metadata.json` is parsed whole, by design: it is scoped to
   stay small.
-- Hash-only by design (see above).
+- Notary verification mirrors the public record format; it does not import
+  recorder code (Contract C2 stays one public contract).
+- The notary public key is pinned by the bundle, not by an external trust
+  anchor. Whether that key is the recorder you trust is a policy decision
+  (SPEC §5.6).
 - The spec is versioned; this verifier accepts `schema_version: "1"` only.
   The manifest is `sha256sum(1)`-compatible two-space format.
 

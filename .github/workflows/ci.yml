@@ -50,3 +50,17 @@ jobs:
           echo "$out" | grep -F "original/CAM-W01_20260914T2210-2235.mp4: hash mismatch" \
             || { echo "::error::rejection must name the file, got: $out"; exit 1; }
           echo "correctly rejected: tampered-original"
+      - name: Negative notary proof fixtures fail (exit 2)
+        run: |
+          check() {
+            set +e
+            out=$(./target/release/verify "fixtures/$1" 2>&1)
+            code=$?
+            set -e
+            test "$code" -eq 2 || { echo "::error::$1: expected exit 2, got $code"; exit 1; }
+            echo "$out" | grep -F "$2" > /dev/null \
+              || { echo "::error::$1: expected '$2', got: $out"; exit 1; }
+            echo "correctly rejected: $1"
+          }
+          check tampered-notary-signature "signature does not verify"
+          check tampered-notary-chain "seq discontinuity"

@@ -5,6 +5,39 @@ a version may change.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-19
+
+### Added
+
+- Notary proof verification: `verify` now re-checks the signed record slice
+  instead of only requiring it to be present. `notary/pubkey.json` must
+  parse to a 32-byte Ed25519 key whose derived key id matches; every record
+  must carry `v: 1`, that key id, and a valid Ed25519 signature over the
+  canonical record with `sig` removed; `seq` must be continuous per camera
+  and each `prev_record_hash` must link to its predecessor. A slice may
+  begin mid-chain: the first record's earlier link is not claimed.
+- Coverage: every `retrieved[].source_sha256` must be present and covered by
+  a signed `segment` record; `provenance.detail` counts, seq bounds, key id
+  and camera must agree with the slice when present.
+- `BundleReport.notary_records` (CLI `--json`: `notary_records`) reports how
+  many signed records were verified.
+- Negative vectors `tampered-notary-signature` and `tampered-notary-chain`,
+  re-sealed so the failure lands inside the proof, plus a mid-chain unit
+  test signed with the published test-vector seed.
+
+### Changed
+
+- `verify` names the signed-record count for notary provenance.
+- Dependencies: `base64` and `ed25519-dalek` (verification only; no network
+  capability, guarded by the existing `Cargo.lock` test).
+
+### Spec
+
+- docs/SPEC.md §5.5 step 8 now specifies the signature, key-id, chain and
+  coverage checks; §5.6 states what a bundled key does and does not prove;
+  §7 allows verifier strictness to increase in a MINOR release for bundles
+  that never conformed.
+
 ## [0.1.0] - 2026-10-19
 
 Born public, born tagged.

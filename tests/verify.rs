@@ -168,6 +168,36 @@ fn missing_provenance_proof_fails() {
     assert_eq!(err.exit_code, 2);
 }
 
+#[test]
+fn notary_provenance_must_cover_every_retrieved_file() {
+    // Drop source_sha256 from the retrieved record and re-seal the sidecar.
+    // The seal still holds, but the signed notary proof can no longer be tied
+    // to the footage, so verification must fail rather than pass on presence.
+    let (_tmp, bundle) = copied("notary-provenance");
+    let path = bundle.join("metadata.json");
+    let mut meta: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    meta["retrieved"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("source_sha256");
+    let meta_bytes = serde_json::to_vec_pretty(&meta).unwrap();
+    fs::write(&path, &meta_bytes).unwrap();
+    fs::write(
+        bundle.join("metadata.json.sha256"),
+        format!("{}  metadata.json\n", hex::encode(sha256_bytes(&meta_bytes))),
+    )
+    .unwrap();
+
+    let err = verify_bundle(&bundle).expect_err("uncovored footage must fail");
+    assert_eq!(err.exit_code, 2);
+    assert!(
+        err.message.contains("source_sha256"),
+        "the uncovered file is named, got: {}",
+        err.message
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn a_symlink_is_rejected_not_followed() {

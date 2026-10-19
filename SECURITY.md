@@ -28,9 +28,12 @@ rely on the spec. Bugs that matter most to us:
 
 ## Known limitations (not bugs)
 
-- Hash-only: the verifier does not re-check recorder signatures or hash
-  chains. That boundary is documented in docs/SPEC.md §5.6: a passing seal
-  claims internal consistency, and provenance is a separate sealed claim.
+- Notary verification pins the key carried in the bundle. It does not
+  establish that the key belongs to a recorder the reader trusts, and a slice
+  cannot prove its first record's earlier link or detect tail truncation.
+  See docs/SPEC.md §5.6.
+- `disk_image` provenance is checked for its sealed proof files; the
+  forensic tool's output is not re-derived by this verifier.
 - Accepts schema v1 only (`metadata.schema_version`). Support for future
   schema versions must ship explicitly, never implicitly.
 

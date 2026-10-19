@@ -147,10 +147,27 @@ file: a stranger in the tree is a stranger.
    `source_sha256` is present, that it equals the manifest digest for that
    file.
 8. If `provenance` claims `notary`, the bundle MUST contain sealed
-   `notary/segments.jsonl` and `notary/pubkey.json`; if it claims
-   `disk_image`, it MUST contain `forensic/{acquisition.json, image.sha256,
-   parser.json, index.json, gaps.json, parser-log.jsonl,
-   package.sha256sums}`. Missing proof rejects.
+   `notary/segments.jsonl` and `notary/pubkey.json`, and the verifier MUST
+   re-verify the proof:
+   - `pubkey.json` MUST name `alg: "ed25519"`, carry a 32-byte
+     `public_key_b64`, and, when `key_id` is present, that id MUST equal the
+     first 8 bytes of SHA-256 of the public key, hex.
+   - Every record MUST carry `v: 1`, that key id, and an Ed25519 signature
+     that verifies over the canonical record (sorted keys, no whitespace)
+     with `sig` removed.
+   - `seq` MUST be continuous within each camera's run and each
+     `prev_record_hash` MUST equal the previous record's SHA-256 (canonical
+     record including `sig`). A slice MAY begin mid-chain: the first
+     record's link to earlier history is not checkable from the slice and
+     is not claimed.
+   - Every `retrieved[].source_sha256` MUST be present and covered by a
+     signed `segment` record.
+   - When `provenance.detail` carries `records`, `first_seq`, `last_seq`,
+     `key_id` or `camera`, those values MUST agree with the slice.
+
+   If it claims `disk_image`, it MUST contain
+   `forensic/{acquisition.json, image.sha256, parser.json, index.json,
+   gaps.json, parser-log.jsonl, package.sha256sums}`. Missing proof rejects.
 
 Exit contract: `0` verified; `2` rejected; `3` usage. A verifier MAY
 report extras (gap counts, provenance kind) but MUST NOT report a passing
@@ -159,15 +176,21 @@ seal that failed steps 1-8.
 Gaps in camera coverage do not fail verification: they are records, not
 absences of integrity.
 
-### 5.6 What hash verification does not prove
+### 5.6 What verification does not prove
 
-This spec's verifier establishes internal consistency: the tree agrees with
-its manifest and the manifest agrees with itself. It does not establish
-where the bytes came from, who signed them, or that the recorder chain is
-unbroken: those claims live in the provenance proofs, and their
-cryptographic verification is a separate component (the recorder is a
-separate public artifact, and producing gateways re-verify before sealing).
-A bundle proves only what it documents: policy decides the rest.
+Hash verification establishes internal consistency: the tree agrees with its
+manifest and the manifest agrees with itself.
+
+For a `notary` proof, verification additionally establishes that every record
+was signed by the key carried in the bundle, that the records chain together,
+and that every retrieved file's hash is covered by a signed segment record. It
+does not establish that the key belongs to the recorder the reader trusts:
+`pubkey.json` travels with the bundle, so the key is pinned by the bundle, not
+by an external trust anchor. It also cannot check the first record's link to
+earlier history (a slice is a window), and tail truncation is only detectable
+against an off-box copy of a signed checkpoint. Where the bytes came from, who
+is authorized to sign, and whether the chain was truncated are policy
+questions. A bundle proves only what it documents: policy decides the rest.
 
 ## 6. Provenance proofs
 
@@ -177,12 +200,20 @@ Required files (all listed in `SHA256SUMS` as payload):
 
 - `notary/segments.jsonl`: the signed record slice covering every retrieved
   file's hash, including signed gap records where the source lost windows.
+  It MAY be empty only when `retrieved[]` is empty (a window with no footage
+  at all); an empty slice with a non-empty `retrieved[]` rejects.
 - `notary/pubkey.json`: the public key material identifying the signer.
 
 The record chain format is specified by the recorder that produced it:
 see the public [alecto-notary](https://github.com/alecto-security/alecto-notary)
 repository for the segment record format, the Ed25519 signatures, the
 key id rules and the shared test vectors.
+
+The proof is not a mere attachment: per §5.5 step 8 the verifier re-checks
+every signature, the key id, seq continuity and the links inside the slice,
+and requires each retrieved hash to be covered by a signed `segment` record.
+The verifier mirrors this format from the public contract; it does not import
+the recorder's code.
 
 ### 6.2 `disk_image` proof
 
@@ -207,11 +238,19 @@ exists to prevent.
 - The seal algorithm (§5) changes atomically with `SHA256SUMS` format
   changes only under §5.1's grammar. Any tool that changes what
   `sha256sum -c` accepts is a breaking change.
+- Verifier strictness MAY increase in a MINOR release when the new check
+  rejects bundles that never satisfied a MUST above (for example, adding
+  cryptographic re-verification of a provenance proof that was previously
+  checked only for presence). The schema and the seal do not change.
 
 ## 8. Test vectors
 
 The `fixtures/` directory holds canonical bundles: the expected result of
-every rule in §5 is pinned by one of them, including the negative case
-(post-seal tamper). They are generated from the reference implementation
-and re-verified by this repo's CI on every commit. Fixtures are synthetic
-markers, not media; they test the contract, not codecs.
+every rule in §5 is pinned by one of them, including the negative cases:
+post-seal tamper (`tampered-original`), a broken Ed25519 signature
+(`tampered-notary-signature`) and a broken record chain
+(`tampered-notary-chain`). The notary negatives are re-sealed, so the seal
+holds and the failure lands inside the proof. They are generated from the
+reference implementation and re-verified by this repo's CI on every commit.
+Fixtures are synthetic markers, not media; they test the contract, not
+codecs.
