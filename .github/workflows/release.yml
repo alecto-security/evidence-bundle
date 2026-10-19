@@ -169,13 +169,34 @@ jobs:
         run: |
           set -euo pipefail
           notes=$(mktemp)
+          {
+            echo "## Binaries"
+            echo
+            echo "No Rust toolchain needed. Download the asset for your platform,"
+            echo "check it against \`sha256sums.txt\`, and run it. Linux builds are"
+            echo "static (musl); Windows ships \`verify.exe\` inside a \`.zip\`."
+            echo
+            echo "| Platform | Asset |"
+            echo "|---|---|"
+            echo "| Linux x86_64 | \`verify-$VERSION-x86_64-unknown-linux-musl.tar.gz\` |"
+            echo "| Linux aarch64 | \`verify-$VERSION-aarch64-unknown-linux-musl.tar.gz\` |"
+            echo "| macOS Apple silicon | \`verify-$VERSION-aarch64-apple-darwin.tar.gz\` |"
+            echo "| macOS Intel | \`verify-$VERSION-x86_64-apple-darwin.tar.gz\` |"
+            echo "| Windows x86_64 | \`verify-$VERSION-x86_64-pc-windows-msvc.zip\` |"
+            echo
+            echo '```console'
+            echo "$ sha256sum -c sha256sums.txt"
+            echo "$ tar -xzf verify-$VERSION-x86_64-unknown-linux-musl.tar.gz"
+            echo "$ ./verify-$VERSION-x86_64-unknown-linux-musl/verify ./CASE-2026-1842"
+            echo '```'
+            echo
+          } > "$notes"
           awk -v v="${VERSION#v}" '
             $0 ~ "^## \\["v"\\]" { on = 1; next }
             on && /^## \[/ { exit }
-            on' CHANGELOG.md > "$notes"
-          if [ ! -s "$notes" ]; then
+            on' CHANGELOG.md >> "$notes"
+          if ! grep -q '^### ' "$notes"; then
             echo "::warning::no CHANGELOG section for $VERSION"
-            echo "$VERSION" > "$notes"
           fi
           if gh release view "$VERSION" > /dev/null 2>&1; then
             gh release upload "$VERSION" dist/* --clobber
