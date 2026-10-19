@@ -1,0 +1,39 @@
+{
+  "schema_version": "1",
+  "case_id": "CASE-2026-9003",
+  "requested_window": {
+    "start": "2026-10-02T14:03:00Z",
+    "end": "2026-10-02T14:05:00Z"
+  },
+  "retrieved": [
+    {
+      "source_id": "CAM-W01",
+      "start": "2026-10-02T14:03:00Z",
+      "end": "2026-10-02T14:04:00Z",
+      "file": "original/CAM-W01_20261002T140300Z_seq1.ts",
+      "source_sha256": "2f05c3445684a0f25189958a2862c94d76a90a1357ca21d0ebab230d3ef38537"
+    }
+  ],
+  "gaps": [],
+  "retrieved_at": "2026-10-02T15:00:05Z",
+  "gateway": {
+    "id": "alecto-gateway-Vladislavs-MacBook-Air.local",
+    "version": "0.1.0",
+    "software_only": true
+  },
+  "bundle_hash": "d19426f3771b9361f9152a4225fbd2c97c532d632edea7c534f5ad2dec91f08a",
+  "report_status": "pending",
+  "provenance": {
+    "kind": "notary",
+    "detail": {
+      "camera": "CAM-W01",
+      "chain_verified_by_gateway": true,
+      "device_id": "notary-fixture",
+      "first_seq": 1,
+      "key_id": "65b60673d6ed884b",
+      "last_seq": 2,
+      "note": "segments are whole and byte-exact; bounds may exceed the requested window",
+      "records": 2
+    }
+  }
+}

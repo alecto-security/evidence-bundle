@@ -37,10 +37,38 @@ fn coverage_gaps_are_first_class_and_reported() {
 fn provenance_is_reported() {
     let notary = verify_bundle(&fixture("notary-provenance")).expect("notary fixture verifies");
     assert_eq!(notary.provenance.as_deref(), Some("notary"));
+    assert_eq!(notary.notary_records, Some(2), "both signed records are verified");
     let disk = verify_bundle(&fixture("disk-image-provenance")).expect("disk fixture verifies");
     assert_eq!(disk.provenance.as_deref(), Some("disk_image"));
+    assert_eq!(disk.notary_records, None);
     let plain = verify_bundle(&fixture("minimal-full-coverage")).expect("minimal verifies");
     assert_eq!(plain.provenance, None);
+}
+
+/// The negative notary vectors: each is re-sealed, so the seal holds and the
+/// failure surfaces where the tamper is, inside the proof.
+#[test]
+fn tampered_notary_signature_fails_on_the_signature() {
+    let err = verify_bundle(&fixture("tampered-notary-signature"))
+        .expect_err("a flipped signature byte must fail");
+    assert_eq!(err.exit_code, 2);
+    assert!(
+        err.message.contains("notary/segments.jsonl") && err.message.contains("signature does not verify"),
+        "the proof file and the signature are named, got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn tampered_notary_chain_fails_on_continuity() {
+    let err = verify_bundle(&fixture("tampered-notary-chain"))
+        .expect_err("a reordered slice must fail");
+    assert_eq!(err.exit_code, 2);
+    assert!(
+        err.message.contains("notary/segments.jsonl") && err.message.contains("seq discontinuity"),
+        "the proof file and the discontinuity are named, got: {}",
+        err.message
+    );
 }
 
 #[test]

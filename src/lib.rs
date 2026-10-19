@@ -1,18 +1,26 @@
-//! Hash-only verification for sealed evidence bundles.
+//! Verification for sealed evidence bundles.
 //!
-//! Scope (v0.1.0): the seal algorithm. Every payload file named in
-//! `SHA256SUMS` is re-hashed and compared; the `metadata.json` sidecar is
-//! re-hashed; `metadata.bundle_hash` is re-computed from the `SHA256SUMS`
-//! bytes; provenance claims are checked for the presence of their proof
-//! files. Signature and chain re-verification for notary provenance is
-//! deliberately out of scope here: that belongs to the notary's own
-//! public verifier and the producing gateway. This crate never sees the
-//! network and never writes anything.
+//! Scope (v0.2.0): the seal algorithm plus the notary provenance proof.
+//! Every payload file named in `SHA256SUMS` is re-hashed and compared; the
+//! `metadata.json` sidecar is re-hashed; `metadata.bundle_hash` is
+//! re-computed from the `SHA256SUMS` bytes; provenance claims are checked
+//! for their proof files. When the proof is a notary slice, every record's
+//! Ed25519 signature is verified over the canonical record, the record key
+//! id is checked, and seq continuity plus `prev_record_hash` links are
+//! verified inside the slice. The first record's link to earlier history
+//! cannot be checked from a slice and is not claimed.
+//!
+//! This crate never sees the network and never writes anything. It mirrors
+//! the public notary record format; it does not import notary code.
 
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Component, Path};
 
+use base64::engine::general_purpose::STANDARD as B64;
+use base64::Engine;
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
@@ -26,6 +34,10 @@ const METADATA_SIDECAR: &str = "metadata.json.sha256";
 const POST_SEAL_ALLOWLIST: &[&str] = &["evidence-report.pdf"];
 
 const NOTARY_PROOF: &[&str] = &["notary/segments.jsonl", "notary/pubkey.json"];
+const NOTARY_PUBKEY: &str = "notary/pubkey.json";
+const NOTARY_SEGMENTS: &str = "notary/segments.jsonl";
+/// Contract C2 record version this verifier knows (alecto-notary 0.1.0).
+const NOTARY_RECORD_VERSION: u64 = 1;
 
 const DISK_IMAGE_PROOF: &[&str] = &[
     "forensic/acquisition.json",
@@ -70,6 +82,8 @@ pub struct BundleReport {
     pub files_verified: usize,
     pub gaps: usize,
     pub provenance: Option<String>,
+    /// Present when a notary proof was verified: how many signed records it holds.
+    pub notary_records: Option<usize>,
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -192,6 +206,284 @@ fn require_provenance_files(kind: &str, required: &[&str], on_disk: &[(String, S
         }
     }
     Ok(())
+}
+
+/// What `verify` needs from `metadata.retrieved[]` to check notary coverage.
+struct RetrievedProof {
+    file: String,
+    source_sha256: Option<String>,
+}
+
+/// Canonical JSON for the notary record format: object keys sorted, no
+/// insignificant whitespace, arrays in order. Mirrors Contract C2.
+fn canonical_json(value: &Value) -> String {
+    match value {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            let parts: Vec<String> = keys
+                .into_iter()
+                .map(|k| {
+                    format!(
+                        "{}:{}",
+                        serde_json::to_string(k).expect("string serializes"),
+                        canonical_json(&map[k])
+                    )
+                })
+                .collect();
+            format!("{{{}}}", parts.join(","))
+        }
+        Value::Array(items) => {
+            let parts: Vec<String> = items.iter().map(canonical_json).collect();
+            format!("[{}]", parts.join(","))
+        }
+        other => serde_json::to_string(other).expect("scalar serializes"),
+    }
+}
+
+fn parse_notary_public(b64: &str) -> VerifyResult<VerifyingKey> {
+    let bytes = B64
+        .decode(b64.trim())
+        .map_err(|_| VerifyError::failure(format!("{NOTARY_PUBKEY}: public_key_b64 is not valid base64")))?;
+    let arr: [u8; 32] = bytes
+        .try_into()
+        .map_err(|_| VerifyError::failure(format!("{NOTARY_PUBKEY}: public key must be 32 bytes")))?;
+    VerifyingKey::from_bytes(&arr)
+        .map_err(|_| VerifyError::failure(format!("{NOTARY_PUBKEY}: invalid Ed25519 public key")))
+}
+
+/// First 8 bytes of SHA-256 of the public key, hex (Contract C2 key id).
+fn notary_key_id(public: &VerifyingKey) -> String {
+    hex::encode(&Sha256::digest(public.as_bytes())[..8])
+}
+
+/// SHA-256 of the canonical record including `sig`: what the next record links to.
+fn notary_record_hash(record: &Value) -> String {
+    hex::encode(Sha256::digest(canonical_json(record).as_bytes()))
+}
+
+fn verify_notary_signature(record: &Value, public: &VerifyingKey) -> VerifyResult<()> {
+    let sig_b64 = record
+        .get("sig")
+        .and_then(Value::as_str)
+        .ok_or_else(|| VerifyError::failure("record has no sig"))?;
+    let bytes = B64
+        .decode(sig_b64)
+        .map_err(|_| VerifyError::failure("record sig is not valid base64"))?;
+    let arr: [u8; 64] = bytes
+        .try_into()
+        .map_err(|_| VerifyError::failure("record sig must be 64 bytes"))?;
+    let mut unsigned = record.clone();
+    unsigned
+        .as_object_mut()
+        .ok_or_else(|| VerifyError::failure("record is not an object"))?
+        .remove("sig");
+    public
+        .verify(canonical_json(&unsigned).as_bytes(), &Signature::from_bytes(&arr))
+        .map_err(|_| VerifyError::failure("signature does not verify"))
+}
+
+fn hex64(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Verify one contiguous notary slice: every signature over the canonical
+/// record, the key id, the record version, seq continuity and the
+/// `prev_record_hash` links inside each camera's run. A slice may start in the
+/// middle of a chain, so the first record's own link to earlier history is
+/// not checked. Returns the signed `segment` hashes and the cameras seen.
+fn verify_notary_slice(
+    records: &[Value],
+    expected_key_id: &str,
+    public: &VerifyingKey,
+) -> VerifyResult<(HashSet<String>, BTreeSet<String>)> {
+    // An empty slice is valid only when the bundle claims no footage; the
+    // caller enforces that, because coverage is its job.
+    // Chain state is per camera: a slice is one camera's contiguous run.
+    let mut prev_by_camera: BTreeMap<String, (u64, String)> = BTreeMap::new();
+    let mut signed_hashes: HashSet<String> = HashSet::new();
+    let mut cameras: BTreeSet<String> = BTreeSet::new();
+
+    for record in records {
+        let seq = record
+            .get("seq")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| VerifyError::failure(format!("{NOTARY_SEGMENTS}: a record has no seq")))?;
+        if record.get("v").and_then(Value::as_u64) != Some(NOTARY_RECORD_VERSION) {
+            return Err(VerifyError::failure(format!(
+                "{NOTARY_SEGMENTS} seq {seq}: unsupported record version (this verifier knows {NOTARY_RECORD_VERSION})"
+            )));
+        }
+        if record.get("key_id").and_then(Value::as_str) != Some(expected_key_id) {
+            return Err(VerifyError::failure(format!(
+                "{NOTARY_SEGMENTS} seq {seq}: signed by a different key id"
+            )));
+        }
+        verify_notary_signature(record, public)
+            .map_err(|e| VerifyError::failure(format!("{NOTARY_SEGMENTS} seq {seq}: {e}")))?;
+        let prev_hash = record
+            .get("prev_record_hash")
+            .and_then(Value::as_str)
+            .ok_or_else(|| VerifyError::failure(format!("{NOTARY_SEGMENTS} seq {seq}: no prev_record_hash")))?;
+        if !hex64(prev_hash) {
+            return Err(VerifyError::failure(format!(
+                "{NOTARY_SEGMENTS} seq {seq}: prev_record_hash is not 32 bytes of hex"
+            )));
+        }
+        let camera = record
+            .get("camera_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| VerifyError::failure(format!("{NOTARY_SEGMENTS} seq {seq}: no camera_id")))?;
+        if let Some((prev_seq, expected_hash)) = prev_by_camera.get(camera) {
+            if seq != prev_seq + 1 {
+                return Err(VerifyError::failure(format!(
+                    "{NOTARY_SEGMENTS}: seq discontinuity: expected {}, found {seq}",
+                    prev_seq + 1
+                )));
+            }
+            if prev_hash != expected_hash {
+                return Err(VerifyError::failure(format!(
+                    "{NOTARY_SEGMENTS} seq {seq}: chain break (prev_record_hash does not match)"
+                )));
+            }
+        }
+        if record.get("kind").and_then(Value::as_str) == Some("segment") {
+            if let Some(sha) = record.get("sha256").and_then(Value::as_str) {
+                signed_hashes.insert(sha.to_string());
+            }
+        }
+        cameras.insert(camera.to_string());
+        prev_by_camera.insert(camera.to_string(), (seq, notary_record_hash(record)));
+    }
+    Ok((signed_hashes, cameras))
+}
+
+/// Verify the `notary` provenance proof: the public key, every Ed25519
+/// signature over the canonical record, the key id, seq continuity and the
+/// `prev_record_hash` links inside each camera's slice.
+///
+/// The first record's own link to earlier history cannot be checked from a
+/// slice and is not claimed. Every retrieved file must be covered by a signed
+/// `segment` record, and the metadata's own summary of the slice must agree
+/// with the records when present.
+fn verify_notary_proof(dir: &Path, meta: &Value, retrieved: &[RetrievedProof]) -> VerifyResult<usize> {
+    let key_bytes = fs::read(dir.join(NOTARY_PUBKEY))
+        .map_err(|e| VerifyError::failure(format!("{NOTARY_PUBKEY}: cannot read: {e}")))?;
+    let key: Value = serde_json::from_slice(&key_bytes)
+        .map_err(|e| VerifyError::failure(format!("{NOTARY_PUBKEY}: not valid JSON ({e})")))?;
+    let alg = key
+        .get("alg")
+        .and_then(Value::as_str)
+        .ok_or_else(|| VerifyError::failure(format!("{NOTARY_PUBKEY}: missing `alg`")))?;
+    if !alg.eq_ignore_ascii_case("ed25519") {
+        return Err(VerifyError::failure(format!(
+            "{NOTARY_PUBKEY}: unsupported alg `{alg}` (expected `ed25519`)"
+        )));
+    }
+    let public_b64 = key
+        .get("public_key_b64")
+        .and_then(Value::as_str)
+        .ok_or_else(|| VerifyError::failure(format!("{NOTARY_PUBKEY}: missing `public_key_b64`")))?;
+    let public = parse_notary_public(public_b64)?;
+    let expected_key_id = notary_key_id(&public);
+    if let Some(declared) = key.get("key_id").and_then(Value::as_str) {
+        if declared != expected_key_id {
+            return Err(VerifyError::failure(format!(
+                "{NOTARY_PUBKEY}: key_id `{declared}` does not match the public key (`{expected_key_id}`)"
+            )));
+        }
+    }
+
+    let text = fs::read_to_string(dir.join(NOTARY_SEGMENTS))
+        .map_err(|e| VerifyError::failure(format!("{NOTARY_SEGMENTS}: cannot read: {e}")))?;
+    let mut records: Vec<Value> = Vec::new();
+    for (n, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            return Err(VerifyError::failure(format!(
+                "{NOTARY_SEGMENTS} line {}: unexpected empty line",
+                n + 1
+            )));
+        }
+        let record: Value = serde_json::from_str(line).map_err(|e| {
+            VerifyError::failure(format!("{NOTARY_SEGMENTS} line {}: not valid JSON ({e})", n + 1))
+        })?;
+        if !record.is_object() {
+            return Err(VerifyError::failure(format!(
+                "{NOTARY_SEGMENTS} line {}: not a JSON object",
+                n + 1
+            )));
+        }
+        records.push(record);
+    }
+    if records.is_empty() && !retrieved.is_empty() {
+        return Err(VerifyError::failure(format!(
+            "{NOTARY_SEGMENTS}: the notary proof is empty but the bundle claims footage"
+        )));
+    }
+
+    let (signed_hashes, cameras) = verify_notary_slice(&records, &expected_key_id, &public)?;
+
+    // The proof must actually cover the footage the bundle claims.
+    for item in retrieved {
+        match item.source_sha256.as_deref() {
+            Some(sha) => {
+                if !signed_hashes.contains(sha) {
+                    return Err(VerifyError::failure(format!(
+                        "{}: not covered by a signed notary segment record",
+                        item.file
+                    )));
+                }
+            }
+            None => {
+                return Err(VerifyError::failure(format!(
+                    "{}: no source_sha256, so the notary proof cannot cover it",
+                    item.file
+                )));
+            }
+        }
+    }
+
+    // The metadata's summary of the slice must agree with the slice itself.
+    if let Some(detail) = meta.get("provenance").and_then(|p| p.get("detail")) {
+        if let Some(n) = detail.get("records").and_then(Value::as_u64) {
+            if n as usize != records.len() {
+                return Err(VerifyError::failure(format!(
+                    "metadata.json: provenance.detail.records is {n}, but {NOTARY_SEGMENTS} holds {}",
+                    records.len()
+                )));
+            }
+        }
+        if let Some(first) = detail.get("first_seq").and_then(Value::as_u64) {
+            if records.first().and_then(|r| r.get("seq")).and_then(Value::as_u64) != Some(first) {
+                return Err(VerifyError::failure(
+                    "metadata.json: provenance.detail.first_seq does not match the first record",
+                ));
+            }
+        }
+        if let Some(last) = detail.get("last_seq").and_then(Value::as_u64) {
+            if records.last().and_then(|r| r.get("seq")).and_then(Value::as_u64) != Some(last) {
+                return Err(VerifyError::failure(
+                    "metadata.json: provenance.detail.last_seq does not match the last record",
+                ));
+            }
+        }
+        if let Some(key_id) = detail.get("key_id").and_then(Value::as_str) {
+            if key_id != expected_key_id {
+                return Err(VerifyError::failure(
+                    "metadata.json: provenance.detail.key_id does not match the signing key",
+                ));
+            }
+        }
+        if let Some(camera) = detail.get("camera").and_then(Value::as_str) {
+            if cameras.len() != 1 || !cameras.contains(camera) {
+                return Err(VerifyError::failure(
+                    "metadata.json: provenance.detail.camera does not match the records",
+                ));
+            }
+        }
+    }
+
+    Ok(records.len())
 }
 
 /// Stream-hash one file in fixed-size chunks: bundle payloads are megabytes
@@ -349,6 +641,7 @@ pub fn verify_bundle(dir: &Path) -> VerifyResult<BundleReport> {
             }
         }
     }
+    let mut retrieved_proof: Vec<RetrievedProof> = Vec::new();
     if let Some(retrieved) = meta.get("retrieved") {
         let arr = retrieved.as_array().cloned().unwrap_or_default();
         for (i, r) in arr.iter().enumerate() {
@@ -365,7 +658,8 @@ pub fn verify_bundle(dir: &Path) -> VerifyResult<BundleReport> {
                     "metadata.json: retrieved[{i}].file is not a safe relative path: `{file}`"
                 )));
             }
-            if let Some(sha) = r.get("source_sha256").and_then(Value::as_str) {
+            let source_sha256 = r.get("source_sha256").and_then(Value::as_str).map(str::to_owned);
+            if let Some(sha) = &source_sha256 {
                 let listed = entries
                     .iter()
                     .find(|(_, path)| path == &file)
@@ -381,6 +675,7 @@ pub fn verify_bundle(dir: &Path) -> VerifyResult<BundleReport> {
                     )));
                 }
             }
+            retrieved_proof.push(RetrievedProof { file, source_sha256 });
         }
     }
     let gaps = meta
@@ -394,7 +689,7 @@ pub fn verify_bundle(dir: &Path) -> VerifyResult<BundleReport> {
         .get("provenance")
         .and_then(Value::as_object)
         .map(|p| p.get("kind").and_then(Value::as_str).map(str::to_owned));
-    let provenance = match provenance {
+    let (provenance, notary_records) = match provenance {
         Some(Some(kind)) => {
             let required = match kind.as_str() {
                 "notary" => NOTARY_PROOF,
@@ -406,14 +701,19 @@ pub fn verify_bundle(dir: &Path) -> VerifyResult<BundleReport> {
                 }
             };
             require_provenance_files(&kind, required, &files)?;
-            Some(kind.clone())
+            let records = if kind == "notary" {
+                Some(verify_notary_proof(dir, &meta, &retrieved_proof)?)
+            } else {
+                None
+            };
+            (Some(kind), records)
         }
         Some(None) => {
             return Err(VerifyError::failure(
                 "metadata.json: provenance.kind missing or not a string",
             ))
         }
-        None => None,
+        None => (None, None),
     };
 
     Ok(BundleReport {
@@ -422,5 +722,101 @@ pub fn verify_bundle(dir: &Path) -> VerifyResult<BundleReport> {
         files_verified: entries.len(),
         gaps,
         provenance,
+        notary_records,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The public key carried by the notary test vectors (seed bytes 1..=32).
+    const PUBLIC_B64: &str = "ebVWLo/mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ=";
+    const KEY_ID: &str = "65b60673d6ed884b";
+
+    #[test]
+    fn canonical_json_sorts_keys_and_strips_whitespace() {
+        let v: Value = serde_json::json!({"b": 1, "a": {"d": [1, 2], "c": "x"}});
+        assert_eq!(canonical_json(&v), r#"{"a":{"c":"x","d":[1,2]},"b":1}"#);
+    }
+
+    #[test]
+    fn key_id_is_the_first_eight_bytes_of_the_public_key_hash() {
+        let public = parse_notary_public(PUBLIC_B64).unwrap();
+        assert_eq!(notary_key_id(&public), KEY_ID);
+    }
+
+    /// A slice may begin mid-chain: `seq` does not have to start at 1, and the
+    /// first record's link to earlier history is not claimed. Records are
+    /// signed here with the published test-vector seed, so this also proves the
+    /// verifier's canonical form matches the notary's.
+    #[test]
+    fn a_slice_may_start_in_the_middle_of_a_chain() {
+        use ed25519_dalek::{Signer, SigningKey};
+        let seed: [u8; 32] = std::array::from_fn(|i| (i + 1) as u8);
+        let signing = SigningKey::from_bytes(&seed);
+        assert_eq!(notary_key_id(&signing.verifying_key()), KEY_ID);
+
+        let sign_record = |mut record: Value, prev: String| -> Value {
+            record["prev_record_hash"] = Value::String(prev);
+            let mut unsigned = record.clone();
+            unsigned.as_object_mut().unwrap().remove("sig");
+            let sig = signing.sign(canonical_json(&unsigned).as_bytes());
+            record["sig"] = Value::String(B64.encode(sig.to_bytes()));
+            record
+        };
+
+        let sha = "aa".repeat(32);
+        let first = sign_record(
+            serde_json::json!({
+                "v": 1, "kind": "segment", "device_id": "notary-fixture",
+                "key_id": KEY_ID, "camera_id": "CAM-W01", "seq": 41,
+                "start_utc": "2026-10-02T14:03:00.000Z", "end_utc": "2026-10-02T14:04:00.000Z",
+                "file": "segments/CAM-W01/2026-10-02/140300_41.ts",
+                "sha256": sha, "bytes": 35,
+                "clock": {"source": "ntp", "skew_ms": 400}, "sig": ""
+            }),
+            "a".repeat(64),
+        );
+        let second = sign_record(
+            serde_json::json!({
+                "v": 1, "kind": "gap", "device_id": "notary-fixture",
+                "key_id": KEY_ID, "camera_id": "CAM-W01", "seq": 42,
+                "start_utc": "2026-10-02T14:04:00.000Z", "end_utc": "2026-10-02T14:05:30.000Z",
+                "reason": "source_unreachable",
+                "clock": {"source": "ntp", "skew_ms": 400}, "sig": ""
+            }),
+            notary_record_hash(&first),
+        );
+
+        let public = parse_notary_public(PUBLIC_B64).unwrap();
+        let (signed, cameras) = verify_notary_slice(&[first, second], KEY_ID, &public)
+            .expect("a slice starting at seq 41 verifies");
+        assert!(signed.contains(&sha));
+        assert_eq!(cameras.len(), 1);
+    }
+
+    #[test]
+    fn an_empty_slice_is_allowed_when_no_footage_is_claimed() {
+        let public = parse_notary_public(PUBLIC_B64).unwrap();
+        let (signed, cameras) = verify_notary_slice(&[], KEY_ID, &public).unwrap();
+        assert!(signed.is_empty());
+        assert!(cameras.is_empty());
+    }
+
+    #[test]
+    fn a_reordered_slice_breaks_the_chain() {
+        // Take the fixture's two real records, swap them: every signature still
+        // verifies, but seq 1 after seq 2 is a discontinuity.
+        let text = fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/notary-provenance/notary/segments.jsonl"),
+        )
+        .unwrap();
+        let mut records: Vec<Value> = text.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        records.reverse();
+        let public = parse_notary_public(PUBLIC_B64).unwrap();
+        let err = verify_notary_slice(&records, KEY_ID, &public).unwrap_err();
+        assert!(err.message.contains("seq discontinuity"), "got: {}", err.message);
+        assert_eq!(err.exit_code, 2);
+    }
 }

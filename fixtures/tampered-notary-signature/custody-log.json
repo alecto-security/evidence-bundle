@@ -1,0 +1,22 @@
+{
+  "events": [
+    {
+      "actor": "fixture.operator",
+      "at": "2026-09-14T22:36:00Z",
+      "note": "CAM-W01: fixture source",
+      "phase": "identified"
+    },
+    {
+      "actor": "fixture.operator",
+      "at": "2026-09-14T22:36:04Z",
+      "note": "CAM-W01 -> original/CAM-W01_20261002T140300Z_seq1.ts",
+      "phase": "acquired"
+    },
+    {
+      "actor": "fixture.operator",
+      "at": "2026-09-14T22:36:12Z",
+      "note": "case_id=CASE-2026-9003 sealed",
+      "phase": "preserved"
+    }
+  ]
+}
