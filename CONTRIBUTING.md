@@ -33,6 +33,18 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
+## Releases
+
+Tags are `vX.Y.Z` on `main`, cut only after CI is green, and the tag must
+match `Cargo.toml`. Pushing a tag runs `.github/workflows/release.yml`: it
+re-runs clippy and the tests, builds `verify` for linux (x86_64 and aarch64,
+static musl), macOS (x86_64 and aarch64) and windows (x86_64), smoke-tests the
+shipped linux binary against `fixtures/`, and publishes the archives with a
+`sha256sums.txt` to GitHub Releases. Release notes come from `CHANGELOG.md`.
+
+`workflow_dispatch` takes an existing tag and republishes its assets — that is
+how a broken or missing release is repaired without moving a tag.
+
 ## Hygiene
 
 Bundles are evidence. Never attach a real case bundle to an issue or PR:
