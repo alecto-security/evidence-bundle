@@ -5,6 +5,16 @@ a version may change.
 
 ## [Unreleased]
 
+### Added
+
+- Release workflow: a `vX.Y.Z` tag builds `verify` for linux (x86_64 and
+  aarch64, static musl), macOS (x86_64 and aarch64) and windows (x86_64),
+  gates on clippy and the test suite, smoke-tests the shipped linux binary
+  against `fixtures/`, and publishes the archives with a `sha256sums.txt` as
+  a GitHub Release. `workflow_dispatch` republishes an existing tag.
+- README quickstart for the prebuilt binaries, so running the verifier needs
+  no Rust toolchain.
+
 ## [0.1.0] - 2026-10-19
 
 Born public, born tagged.

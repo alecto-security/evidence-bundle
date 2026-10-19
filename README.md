@@ -13,6 +13,7 @@ sealed, and that the bundle's own integrity record agrees with the files.
 <p align="center">
   <a href="https://github.com/alecto-security/evidence-bundle/actions/workflows/ci.yml"><img src="https://github.com/alecto-security/evidence-bundle/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue.svg" alt="License: Apache-2.0"></a>
+  <a href="https://github.com/alecto-security/evidence-bundle/releases"><img src="https://img.shields.io/github/v/release/alecto-security/evidence-bundle?label=release&sort=semver" alt="Latest release"></a>
   <img src="https://img.shields.io/badge/schema_version-1-purple.svg" alt="Schema version 1">
 </p>
 
@@ -40,8 +41,24 @@ sealed, and that the bundle's own integrity record agrees with the files.
 
 ## Quickstart
 
+No Rust needed. Download the archive for your platform from
+[Releases](https://github.com/alecto-security/evidence-bundle/releases),
+check it against the release's `sha256sums.txt`, and run it:
+
+```console
+$ sha256sum -c sha256sums.txt
+verify-v0.1.0-x86_64-unknown-linux-musl.tar.gz: OK
+$ tar -xzf verify-v0.1.0-x86_64-unknown-linux-musl.tar.gz
+$ ./verify-v0.1.0-x86_64-unknown-linux-musl/verify ./CASE-2026-1842
+# exit 0: seal holds. exit 2: bundle rejected, and the file is named.
+```
+
+Linux builds are static (musl), so they do not depend on the host's glibc.
+On Windows the archive is a `.zip` and the binary is `verify.exe`.
+
+Or build from source — same binary, no camera code, no ffmpeg, no network:
+
 ```bash
-# from source, no camera code, no ffmpeg, no network
 cargo install --path .
 verify ./CASE-2026-1842                 # human-readable report
 verify ./CASE-2026-1842 --json          # machine-readable
