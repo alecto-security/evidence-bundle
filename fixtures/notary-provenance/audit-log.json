@@ -1,0 +1,2 @@
+{"action":"request","actor":"fixture.operator","detail":"source=notary camera=CAM-W01","source":"CASE-2026-9003","ts":"2026-10-02T15:00:00Z"}
+{"action":"verify","actor":"fixture.operator","detail":"notary chain verified before sealing","source":"CAM-W01","ts":"2026-10-02T15:00:02Z"}

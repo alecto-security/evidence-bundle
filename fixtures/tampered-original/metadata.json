@@ -1,0 +1,26 @@
+{
+  "schema_version": "1",
+  "case_id": "CASE-2026-9001",
+  "requested_window": {
+    "start": "2026-09-14T22:10:00Z",
+    "end": "2026-09-14T22:35:00Z"
+  },
+  "retrieved": [
+    {
+      "source_id": "CAM-W01",
+      "start": "2026-09-14T22:10:00Z",
+      "end": "2026-09-14T22:35:00Z",
+      "file": "original/CAM-W01_20260914T2210-2235.mp4",
+      "source_sha256": "f7d532b598a6f4027f150a15c3461d05bbec8209838a5dbabf234e873c8808e2"
+    }
+  ],
+  "gaps": [],
+  "retrieved_at": "2026-09-14T22:36:00Z",
+  "gateway": {
+    "id": "alecto-gateway-Vladislavs-MacBook-Air.local",
+    "version": "0.1.0",
+    "software_only": true
+  },
+  "bundle_hash": "7250430275c1e7993d149ea917b0938a7a9485766829477eb963353cea74a3c1",
+  "report_status": "pending"
+}

@@ -1,0 +1,5 @@
+{"action":"request","actor":"fixture.operator","detail":"cameras=CAM-W01","source":"CASE-2026-9001","ts":"2026-09-14T22:36:00Z"}
+{"action":"discover","actor":"fixture.operator","detail":"onvif:GetReplayUri profile=profile_1","source":"CAM-W01","ts":"2026-09-14T22:36:01Z"}
+{"action":"retrieve","actor":"fixture.operator","detail":"original/CAM-W01_20260914T2210-2235.mp4","source":"CAM-W01","ts":"2026-09-14T22:36:05Z"}
+{"action":"hash","actor":"fixture.operator","detail":"SHA256SUMS","source":"CASE-2026-9001","ts":"2026-09-14T22:36:10Z"}
+{"action":"package","actor":"fixture.operator","detail":"sealing bundle","source":"CASE-2026-9001","ts":"2026-09-14T22:36:11Z"}

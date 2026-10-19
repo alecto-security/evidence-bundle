@@ -1,0 +1,41 @@
+{
+  "schema_version": "1",
+  "case_id": "CASE-2026-9004",
+  "requested_window": {
+    "start": "2026-09-14T22:10:00Z",
+    "end": "2026-09-14T22:35:00Z"
+  },
+  "retrieved": [
+    {
+      "source_id": "disk-stream-0001",
+      "start": "unknown",
+      "end": "unknown",
+      "file": "original/disk-stream-0001.h264",
+      "source_sha256": "eb55c955aed5bdbd0e766acd074f077590367e568edd4b37b05c3311ed0d2c25"
+    }
+  ],
+  "gaps": [],
+  "retrieved_at": "2026-10-02T15:10:05Z",
+  "gateway": {
+    "id": "alecto-gateway-Vladislavs-MacBook-Air.local",
+    "version": "0.1.0",
+    "software_only": true
+  },
+  "bundle_hash": "259a62c6d05b21c274b0d285eba79310ea3d4956f26b0aaa7ed0bc0efd0b20b9",
+  "report_status": "pending",
+  "provenance": {
+    "kind": "disk_image",
+    "detail": {
+      "authorization": "WARRANT-2026-9004",
+      "format": "vendor-recorder-x",
+      "image_bytes": 8388608,
+      "image_file": "evidence-store.raw",
+      "image_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "note": "no timestamps were recovered; the requested window is the examiner's, not the recorder's",
+      "operator": "Jane Examiner",
+      "parser": "alecto-forensic",
+      "parser_version": "0.1.0",
+      "unrecovered_regions": 0
+    }
+  }
+}

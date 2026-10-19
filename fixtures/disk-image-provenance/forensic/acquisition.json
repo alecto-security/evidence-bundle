@@ -1,0 +1,10 @@
+{
+  "acquired_at": "2026-10-02T13:00:00Z",
+  "authorization": "WARRANT-2026-9004",
+  "image_bytes": 8388608,
+  "image_file": "evidence-store.raw",
+  "image_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "operator": "Jane Examiner",
+  "v": 1,
+  "write_blocker": "blockdev read-only"
+}

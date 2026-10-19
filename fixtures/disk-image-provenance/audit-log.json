@@ -1,0 +1,2 @@
+{"action":"request","actor":"fixture.operator","detail":"source=disk_image","source":"CASE-2026-9004","ts":"2026-10-02T15:10:00Z"}
+{"action":"ingest","actor":"fixture.operator","detail":"disk-stream-0001.h264 sha256=eb55c955aed5bdbd0e766acd074f077590367e568edd4b37b05c3311ed0d2c25","source":"disk-stream-0001","ts":"2026-10-02T15:10:01Z"}

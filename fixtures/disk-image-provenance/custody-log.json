@@ -1,0 +1,22 @@
+{
+  "events": [
+    {
+      "actor": "fixture.operator",
+      "at": "2026-09-14T22:36:00Z",
+      "note": "disk-stream-0001: fixture source",
+      "phase": "identified"
+    },
+    {
+      "actor": "fixture.operator",
+      "at": "2026-09-14T22:36:04Z",
+      "note": "disk-stream-0001 -> original/disk-stream-0001.h264",
+      "phase": "acquired"
+    },
+    {
+      "actor": "fixture.operator",
+      "at": "2026-09-14T22:36:12Z",
+      "note": "case_id=CASE-2026-9004 sealed",
+      "phase": "preserved"
+    }
+  ]
+}

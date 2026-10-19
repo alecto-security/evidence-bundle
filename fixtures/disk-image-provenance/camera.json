@@ -1,0 +1,15 @@
+[
+  {
+    "source_id": "disk-stream-0001",
+    "name": "Recovered stream 1 (channel unknown)",
+    "vendor": "vendor-recorder-x",
+    "model": "disk_image",
+    "firmware": "",
+    "onvif_profile": "",
+    "rtsp_uri_redacted": "",
+    "resolution": "unknown",
+    "fps": "unknown",
+    "codec": "h264",
+    "time_source": "none: no timestamps recovered from the disk"
+  }
+]

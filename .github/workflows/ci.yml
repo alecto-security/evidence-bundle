@@ -1,0 +1,52 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test + clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        run: cargo test
+
+  fixtures:
+    # The gate that matters: the standard, the vectors and the verifier must
+    # agree on every commit, valid and negative alike.
+    name: fixture gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build release verifier
+        run: cargo build --release
+      - name: Valid fixtures verify (exit 0)
+        run: |
+          for f in minimal-full-coverage coverage-gaps notary-provenance disk-image-provenance; do
+            ./target/release/verify "fixtures/$f" --json > /dev/null
+            echo "pass: $f"
+          done
+      - name: Negative fixture fails naming the file (exit 2)
+        run: |
+          set +e
+          out=$(./target/release/verify fixtures/tampered-original 2>&1)
+          code=$?
+          set -e
+          test "$code" -eq 2 || { echo "::error::expected exit 2, got $code"; exit 1; }
+          echo "$out" | grep -F "original/CAM-W01_20260914T2210-2235.mp4: hash mismatch" \
+            || { echo "::error::rejection must name the file, got: $out"; exit 1; }
+          echo "correctly rejected: tampered-original"

@@ -1,0 +1,15 @@
+[
+  {
+    "source_id": "CAM-W01",
+    "name": "West entrance",
+    "vendor": "fixture",
+    "model": "fixture-camera",
+    "firmware": "n/a",
+    "onvif_profile": "profile_1",
+    "rtsp_uri_redacted": "rtsp://***@192.0.2.10:554/Streaming/Channels/101",
+    "resolution": "1920x1080",
+    "fps": "15/1",
+    "codec": "h264",
+    "time_source": "ntp"
+  }
+]

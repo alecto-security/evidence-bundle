@@ -1,0 +1,2 @@
+{"action":"request","actor":"fixture.operator","detail":"cameras=CAM-W01,CAM-W02","source":"CASE-2026-9002","ts":"2026-09-14T22:36:00Z"}
+{"action":"retrieve","actor":"fixture.operator","detail":"source_unreachable","source":"CAM-W02","ts":"2026-09-14T22:36:01Z"}
